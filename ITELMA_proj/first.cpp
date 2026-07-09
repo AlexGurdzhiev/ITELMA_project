@@ -72,6 +72,8 @@ for(const auto& entry : didTable) {
         int readDataSize = 0xFFF;
         status = rtlUIDiagnostics.tsdiag_can_read_data_by_identifier(udsHandle, entry.did, readData, &readDataSize);
         log("READ status = %d, readDataSize = %d", status, readDataSize);
+        app.wait(300, "");
+
         if (entry.did == 0 || entry.mnemonic.empty()) 
         {
             app.wait(300, "");
@@ -79,7 +81,12 @@ for(const auto& entry : didTable) {
         // entry.did, entry.mnemonic.c_str());
         continue;
         }
-                if (entry.access_default_session == "R" && status == 0) {
+        app.wait(300, "");
+
+                if (entry.access_default_session == "R" && status == 0) 
+                {
+                    app.wait(300, "");
+
                     log("OK: DID 0x%04X (%s) - access=R, status=0, совпадает", entry.did, entry.mnemonic.c_str());
                     matchCount++;
                     char txtLine[256];
@@ -88,9 +95,8 @@ for(const auto& entry : didTable) {
 
                 const char* txtArray[1];
                 txtArray[0] = txtLine;
-
-
                 app.write_text_file_line_string_array(reportHandle,txtArray,1);
+                app.wait(300, "");
                 } 
                 else {
                     log("НЕ СОВПАДАЕТ: DID 0x%04X (%s) - access=%s, status=%d",
