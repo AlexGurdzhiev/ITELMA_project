@@ -1,0 +1,8 @@
+Glogal Defenition
+#include "..\..\bin\first\first.cpp"
+
+On Start 
+first();
+
+On Stop
+app.terminate_application();
