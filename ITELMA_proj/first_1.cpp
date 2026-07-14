@@ -1,166 +1,161 @@
 #include "DidRefC.h"
 
-struct CheckStats
+void TryWriteDID(int udsHandle, const DidRefEntry& entry, char* outStatus, bool useExtended = false)
 {
-    int accessMatch = 0;
-    int accessMismatch = 0;
-    int sizeMatch = 0;
-    int sizeMismatch = 0;
-};
+    const char* sessionName = useExtended ? "Extended" : "Default";
 
+    log("Попытка записи DID 0x%04X в %s Session", entry.did, sessionName);
 
-void TryWriteDID(int udsHandle, const DidRefEntry& entry, char* outStatus)
-{
     u8 writeData[0xFFF] = {0};
+    bool isAsciiOrList = (entry.data_type == "ASCII" || entry.data_type == "List");
 
-    if (entry.data_type == "ASCII" || entry.data_type == "List")
+    for (int i = 0; i < entry.length_bytes && i < 0xFFF; i++)
+        writeData[i] = isAsciiOrList ? 0x7A : 0x00;
+
+    int writeStatus = rtlUIDiagnostics.tsdiag_write_data_by_identifier(
+        udsHandle, entry.did, writeData, entry.length_bytes);
+
+    if (writeStatus == 0)
     {
-        for (int i = 0; i < entry.length_bytes; i++)
-            writeData[i] = 0x7A;
-
-        int writeStatus = rtlUIDiagnostics.tsdiag_can_write_data_by_identifier(
-            udsHandle, entry.did, writeData, entry.length_bytes);
-
-        strcpy(outStatus, (writeStatus == 0) ? "WRITE_OK" : "WRITE_FAIL");
-        return;
+        strcpy(outStatus, useExtended ? "WRITE_OK_EXT" : "WRITE_OK");
+        log("Успешно записано в %s Session (DID 0x%04X)", sessionName, entry.did);
     }
-
-    if (entry.data_type == "HEXA" || entry.data_type == "Numerical")
+    else
     {
-        for (int i = 0; i < entry.length_bytes; i++)
-            writeData[i] = 0x00;
-
-        int writeStatus = rtlUIDiagnostics.tsdiag_can_write_data_by_identifier(
-            udsHandle, entry.did, writeData, entry.length_bytes);
-
-        strcpy(outStatus, (writeStatus == 0) ? "WRITE_OK" : "WRITE_FAIL");
-        return;
+        strcpy(outStatus, useExtended ? "WRITE_FAIL_EXT" : "WRITE_FAIL");
+        log("Не удалось записать в %s Session (DID 0x%04X, status=%d)", 
+            sessionName, entry.did, writeStatus);
     }
-
-    strcpy(outStatus, "UNSUPPORTED_TYPE");
 }
 
-
-void Default_ParsData()
+bool CheckDefaultAccess(const DidRefEntry& entry, int readStatus, int readSize, CheckStats& stats)
 {
-    std::vector<DidRefEntry> didTable = loadDidTable();
-    log("Всего DID в таблице: %zu", didTable.size());
-    log("=== Начало проверки доступа к DID в default session ===");
-    log("==Состояние R - соответвует доступно для чтения в default session, status = 0, читает на шине данных, ==");
-
-    CheckStats stats;
-    native_int reportHandle;
-
-    if (0 != app.write_text_file_start(".\\DID_Report.txt", &reportHandle))
+    if (entry.access_default_session == "R" && readStatus == 0)
     {
-        log("Ошибка создания отчета");
-        return;
-    }
-
-    const char* descLine[1];
-    char descText[] = "Скрипт проверки документации статус ACCESS/SIZE/WRITE в default session";
-    descLine[0] = descText;
-    app.write_text_file_line_string_array(reportHandle, descLine, 1);
-
-    // Заголовок таблицы — ровно 7 колонок, без "\n" внутри
-    const char* header[1];
-    char headerText[] = "DID\tMNEMONIC\tACCESS\tDEFAULT_READ_STATUS\tSIZE_ACTUAL\tSIZE_EXPECTED\tDEFAULT_WRITE_STATUS";
-    header[0] = headerText;
-    app.write_text_file_line_string_array(reportHandle, header, 1);
-
-    int udsHandle = -1;
-    int status = rtlUIDiagnostics.tsdiag_can_create(&udsHandle, CH1, 0, 15, 0x78B, 1, 0x7AB, 1, 0x78B, 1);
-    log("create status = %d", status);
-    app.wait(300, "");
-//.................................................................................................................................
-//.......................Проверка доступа к DID в default session, проверка статуса status получаемого из шины......................................................................................
-    for (const auto& entry : didTable)
-    {
-        if (entry.did == 0 || entry.mnemonic.empty())
-            continue;//если строка пустая, то пропускаем
-
-        u8 readData[0xFFF];
-        int readDataSize = 0xFFF;
-        status = rtlUIDiagnostics.tsdiag_can_read_data_by_identifier(udsHandle, entry.did, readData, &readDataSize);
-
-        // Единый статус записи для этой строки отчёта, по умолчанию "N/A"
-        char writeStatusStr[64] = "N/A";
-        bool size_ok = false;
-
-        if (entry.access_default_session == "R" && status == 0)
+        stats.accessMatch++;
+        if (readSize == entry.length_bytes)
         {
-            stats.accessMatch++;
-            size_ok = (readDataSize == entry.length_bytes);
-
-           if (size_ok)
-{
-    stats.sizeMatch++;
-
-    TryWriteDID(udsHandle, entry, writeStatusStr);// проверяем возможность записи в DID, если тип данных поддерживается
-    log("DID 0x%04X (%s): write result = %s",
-        entry.did,
-        entry.mnemonic.c_str(),
-        writeStatusStr);
-}
-            else
-            {
-                stats.sizeMismatch++;
-                strcpy(writeStatusStr, "SKIP_SIZE_MISMATCH");
-                log("НЕ СОВПАДАЕТ: DID 0x%04X (%s) - size: получено=%d эталон=%d",
-                    entry.did, entry.mnemonic.c_str(), readDataSize, entry.length_bytes);
-            }
+            stats.sizeMatch++;
+            return true;
         }
         else
         {
-            stats.accessMismatch++;
-            strcpy(writeStatusStr, "SKIP_ACCESS");
-            log("НЕ СОВПАДАЕТ: DID 0x%04X (%s) - access=%s, status=%d",
-                entry.did, entry.mnemonic.c_str(), entry.access_default_session.c_str(), status);
+            stats.sizeMismatch++;
+            log("DID 0x%04X: размер не совпадает (получено=%d, ожидается=%d)", 
+                entry.did, readSize, entry.length_bytes);
+            return false;
         }
-
-        // Ровно ОДНА строка на DID, ровно 7 колонок, всегда одного формата
-        char txtLine[256];
-       sprintf(txtLine, "0x%04X\t%s\t%s\t%d\t%d\t%d\t%s",
-    entry.did,
-    entry.mnemonic.c_str(),
-    entry.access_default_session.c_str(),
-    status,
-    readDataSize,
-    entry.length_bytes,
-    writeStatusStr);
-        const char* txtArray[1];
-        txtArray[0] = txtLine;
-        app.write_text_file_line_string_array(reportHandle, txtArray, 1);
-
-        app.wait(100, "");
     }
-
-    log("=== ИТОГ: доступ OK=%d FAIL=%d | размер OK=%d MISMATCH=%d ===",
-        stats.accessMatch, stats.accessMismatch, stats.sizeMatch, stats.sizeMismatch);
-
-    char totalLine[128];
-    sprintf(totalLine, "TOTAL\tACCESS_OK=%d\tACCESS_FAIL=%d\tSIZE_OK=%d\tSIZE_FAIL=%d",
-        stats.accessMatch, stats.accessMismatch, stats.sizeMatch, stats.sizeMismatch);
-
-    const char* totalArray[1];
-    totalArray[0] = totalLine;
-    app.write_text_file_line_string_array(reportHandle, totalArray, 1);
-
-    app.write_text_file_end(reportHandle);
-    app.terminate_application();
+    else
+    {
+        stats.accessMismatch++;
+        log("DID 0x%04X: нет доступа в Default Session (access=%s, status=%d)", 
+            entry.did, entry.access_default_session.c_str(), readStatus);
+        return false;
+    }
 }
 
-// void Extended_Session()
-// {
+bool Extended_Session(int udsHandle, const DidRefEntry& entry)
+{
+    log("Переход в Extended Session для DID 0x%04X", entry.did);
+    
+    int result = rtlUIDiagnostics.tsdiag_session_control(udsHandle, 0x03);
+    app.wait(300, "");  
 
-// }
+    if (result != 0)
+    {
+        log("Не удалось перейти в Extended Session, result=%d", result);
+        return false;
+    }
 
+    log("Extended Session OK");
 
+    u8 writeData[0xFFF] = {0};
+    bool isAsciiOrList = (entry.data_type == "ASCII" || entry.data_type == "List");
 
+    for (int i = 0; i < entry.length_bytes && i < 0xFFF; i++)
+        writeData[i] = isAsciiOrList ? 0x7A : 0x00;
+
+    int status = rtlUIDiagnostics.tsdiag_write_data_by_identifier(
+        udsHandle, entry.did, writeData, entry.length_bytes);
+
+    app.wait(300, "");
+
+    if (status == 0)
+    {
+        log("Extended WRITE OK для DID 0x%04X", entry.did);
+        return true;
+    }
+
+    log("Extended WRITE FAIL для DID 0x%04X, status=%d", entry.did, status);
+    return false;
+}
 
 void first()
 {
-    Default_ParsData();
+    log("=== first() started ===");
+
+    std::vector<DidRefEntry> didTable = loadDidTable();
+    log("Всего DID в таблице: %zu", didTable.size());
+
+    CheckStats stats = {};
+    int udsHandle = -1;
+
+    int status = rtlUIDiagnostics.tsdiag_can_create(&udsHandle, CH1, 0, 15, 0x78B, 1, 0x7AB, 1, 0x78B, 1);
+    log("UDS create status = %d", status);
+
+    app.wait(300, "");
+
+    for (const auto& entry : didTable)
+    {
+        if (entry.did == 0 || entry.mnemonic.empty())
+            continue;
+
+        log("=== Обработка DID 0x%04X (%s) ===", entry.did, entry.mnemonic.c_str());
+
+        char defaultWriteStatus[32] = "N/A";
+        char extendedWriteStatus[32] = "N/A";
+
+        // Чтение в Default Session
+        u8 readData[0xFFF] = {0};
+        int readDataSize = 0xFFF;
+
+        status = rtlUIDiagnostics.tsdiag_can_read_data_by_identifier(udsHandle, entry.did, readData, &readDataSize);
+
+        bool canReadDefault = CheckDefaultAccess(entry, status, readDataSize, stats);
+
+        // Попытка записи в Default
+        if (canReadDefault)
+        {
+            TryWriteDID(udsHandle, entry, defaultWriteStatus, false);
+        }
+        else
+        {
+            strcpy(defaultWriteStatus, "NO_ACCESS");
+        }
+
+        // Если Default не прошёл — пробуем Extended
+        if (strcmp(defaultWriteStatus, "WRITE_OK") != 0)
+        {
+            bool extSuccess = Extended_Session(udsHandle, entry);
+            strcpy(extendedWriteStatus, extSuccess ? "WRITE_OK_EXT" : "WRITE_FAIL_EXT");
+        }
+        else
+        {
+            strcpy(extendedWriteStatus, "SKIP_Default_OK");
+        }
+
+        log("Результат DID 0x%04X → Default: %s | Extended: %s", 
+            entry.did, defaultWriteStatus, extendedWriteStatus);
+
+        app.wait(150, "");
+    }
+
+    // Итог
+    log("=== ИТОГОВАЯ СТАТИСТИКА ===");
+    log("Access Match: %d | Mismatch: %d", stats.accessMatch, stats.accessMismatch);
+    log("Size Match: %d | Mismatch: %d", stats.sizeMatch, stats.sizeMismatch);
+
     app.wait(100, "");
     app.terminate_application();
 }
