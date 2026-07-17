@@ -2,6 +2,9 @@
 
 // ====================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ======================
 
+
+
+
 bool EnterExtendedSession(int udsHandle, const DelaySettings& delays)
 {
     log("Переход в Extended Session...");
@@ -51,33 +54,33 @@ void TryWriteInSession(int udsHandle, const DidRefEntry& entry, char* outStatus,
     }
 }
 
-void WriteReportHeader(native_int reportHandle)// делает заголовок reportHandle - 
+void WriteReportHeader(native_int reportHandle)
 {
-    const char* header[1] = {"DID\tMNEMONIC\tACCESS_DEFAULT_SESSION\tREAD_STATUS\tSIZE_ACTUAL\tDEFAULT_READING_COMPLIANCE WITH DOCUMENTATION\tSIZE_EXPECTED\tDEFAULT_WRITE\tEXTENDED_WRITE"};
+    const char* header[1] = {"DID\tMNEMONIC\tACCESS_DEFAULT_SESSION\tREAD_STATUS\tSIZE_ACTUAL\tDEFAULT_READING_COMPLIANCE WITH DOCUMENTATION\tSIZE_EXPECTED\tDEFAULT_WRITE\tEXTENDED_READ_STATUS\tEXTENDED_READ_SIZE\tEXTENDED_WRITE"};
     app.write_text_file_line_string_array(reportHandle, header, 1);
 }
 
-void AppendDIDResultToReport(native_int reportHandle, const DidRefEntry &entry,
-                             int readStatus, int readSize,
-                             const char* defaultWrite, const char* extendedWrite)
+void AppendDIDResultToReport(native_int reportHandle, const DidRefEntry &entry,int readStatus, int readSize,const char* defaultWrite, //>>
+int extendedReadStatus, int extendedReadSize,const char* extendedWrite)
 {
     const char* compliance = (entry.access_default_session == "R" && readStatus == 0) ? "OK" : "FAIL";
     char txtLine[512];
-    sprintf(txtLine, "0x%04X\t%s\t%s\t%d\t%d\t%s\t%d\t%s\t%s",
+    sprintf(txtLine, "0x%04X\t%s\t%s\t%d\t%d\t%s\t%d\t%s\t%d\t%d\t%s",
         entry.did,
         entry.mnemonic.c_str(),
         entry.access_default_session.c_str(),
         readStatus,
         readSize,
-        compliance,              // ← ВСТАВИЛИ
+        compliance,
         entry.length_bytes,
         defaultWrite,
+        extendedReadStatus,
+        extendedReadSize,
         extendedWrite);
 
     const char* txtArray[1] = {txtLine};
     app.write_text_file_line_string_array(reportHandle, txtArray, 1);
 }
-
 void WriteTotalStats(native_int reportHandle, const CheckStats& stats)
 {
     char totalLine[200];
@@ -175,12 +178,15 @@ void first()
     {
         for (auto& res : results)
         {
-            DIDResult res;
-            res.entry = entry;
-            u8 readData[0xFFF];
-            int readSize = 0;
-            res.readStatus = ReadDID(udsHandle, entry, readData, readSize) ? 0 : -1;
-            res.readSize = readSize;
+            u8 extReadData[0xFFF];
+            int extReadSize = 0;
+            res.extendedReadStatus = ReadDID(udsHandle, res.entry, extReadData, extReadSize) ? 0 : -1;
+            res.extendedReadSize = extReadSize;
+
+        log("DID 0x%04X: extended read status=%d size=%d",
+            res.entry.did, res.extendedReadStatus, res.extendedReadSize);
+
+        app.wait(delays.afterRead, "");
 
             char buf[32] = {};
             TryWriteInSession(udsHandle, res.entry, buf, true);
@@ -190,13 +196,12 @@ void first()
     }
 
     for (const auto& res : results)
-    {
-        AppendDIDResultToReport(reportHandle, res.entry, res.readStatus, res.readSize,
-                                res.defaultWrite.c_str(), res.extendedWrite.c_str());
-    }
-
-    WriteTotalStats(reportHandle, stats);
-    app.write_text_file_end(reportHandle);
+{
+    AppendDIDResultToReport(reportHandle, res.entry, res.readStatus, res.readSize,
+                            res.defaultWrite.c_str(),
+                            res.extendedReadStatus, res.extendedReadSize,
+                            res.extendedWrite.c_str());
+}
 
     log("=== Отчет сохранен: DID_Report.txt ===");
     app.terminate_application();
